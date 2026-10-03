@@ -1,0 +1,119 @@
+name: Production Matrix Execution & Diagnostic Pipeline
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  run-script:
+    name: "Pipeline Node [${{ matrix.branch }}]"
+    runs-on: macos-latest
+    timeout-minutes: 310
+
+    strategy:
+      fail-fast: false
+      max-parallel: 5
+      matrix:
+        branch:
+          - backup-1
+          - backup-2
+          - backup-3
+          - backup-4
+          - backup-5
+
+    steps:
+      - name: "[Diagnostics] Initialize Environment & System Profiling"
+        run: |
+          echo "=== HOST SYSTEM PROFILE ==="
+          sw_vers
+          uname -a
+          echo "Logical CPU Count: $(sysctl -n hw.logicalcpu)"
+          echo "Physical CPU Count: $(sysctl -n hw.physicalcpu)"
+          echo "CPU Brand: $(sysctl -n machdep.cpu.brand_string)"
+          echo "Total Memory: $(($(sysctl -n hw.memsize) / 1024 / 1024 / 1024)) GB"
+          df -h
+
+      - name: "[Network] Probe Latency and Uplink Health"
+        run: |
+          echo "=== NETWORK DIAGNOSTICS ==="
+          curl -sI https://github.com | head -n 5
+          traceroute -m 5 -q 1 github.com || true
+
+      - name: "[VCS] Checkout Target Branch"
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.branch }}
+          fetch-depth: 1
+
+      - name: "[VCS] Validate Git Tree & Commit Hash"
+        run: |
+          echo "=== REPOSITORY CONTEXT ==="
+          git status --porcelain
+          echo "HEAD Commit: $(git rev-parse HEAD)"
+          echo "Branch Reference: ${{ matrix.branch }}"
+
+      - name: "[Package Manager] Update Homebrew Formulae Database"
+        run: |
+          brew update
+          brew config
+
+      - name: "[Dependencies] Provision GNU Core Utilities"
+        run: |
+          brew install coreutils
+          which gtimeout
+          gtimeout --version | head -n 1
+
+      - name: "[Security & Audit] Compute Artifact Checksum & Integrity"
+        run: |
+          echo "=== ASSET AUDIT ==="
+          if [ -f "server.zip" ]; then
+            shasum -a 256 server.zip
+            ls -lh server.zip
+          else
+            echo "::error::server.zip not located in workspace root."
+            exit 1
+          fi
+
+      - name: "[Payload] Decompress & Extract Secure Payload"
+        run: |
+          unzip -q -o -P "${{ secrets.ZIP_PASSWORD }}" server.zip
+          echo "Extraction complete. Workspace inventory:"
+          ls -la
+
+      - name: "[Runtime Engine] Fetch and Validate Wasmtime v43.0.2 Release"
+        run: |
+          curl -sSLO https://github.com/bytecodealliance/wasmtime/releases/download/v43.0.2/wasmtime-v43.0.2-aarch64-macos.tar.xz
+          tar -xvf wasmtime-v43.0.2-aarch64-macos.tar.xz
+          sudo mv wasmtime-v43.0.2-aarch64-macos/wasmtime /usr/local/bin/
+          rm -rf wasmtime-v43.0.2-aarch64-macos*
+          echo "Wasmtime Binary Path: $(which wasmtime)"
+          wasmtime --version
+
+      - name: "[Pre-flight] Validate Runtime Script Permissions"
+        run: |
+          chmod +x run.sh
+          ls -l run.sh
+          bash -n run.sh # Syntax validation
+
+      - name: "[Execution] Run Primary Workload Cluster"
+        run: |
+          echo "=== BEGIN CLUSTER EXECUTION ==="
+          gtimeout --preserve-status 17700 sh run.sh
+          echo "=== WORKLOAD EXECUTION CYCLE CONCLUDED ==="
+
+      - name: "[Post-Execution] Collect Memory & Storage Metrics"
+        if: always()
+        run: |
+          echo "=== POST-JOB METRICS ==="
+          top -l 1 | head -n 10
+          df -h
+
+      - name: "[Teardown] Final Workspace Clean & Ephemeral Scrub"
+        if: always()
+        run: |
+          echo "Flushing runtime caches..."
+          sync
+          echo "Pipeline complete for node: ${{ matrix.branch }}"
