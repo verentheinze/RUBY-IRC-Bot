@@ -2,12 +2,7 @@ name: Production Matrix Execution & Diagnostic Pipeline
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * *'
-    - cron: '48 4 * * *'
-    - cron: '36 9 * * *'
-    - cron: '24 14 * * *'
-    - cron: '12 19 * * *'
+  
 
 concurrency:
   group: ${{ github.workflow }}
